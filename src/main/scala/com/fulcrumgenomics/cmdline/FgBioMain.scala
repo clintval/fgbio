@@ -123,12 +123,6 @@ class FgBioMain extends LazyLogging {
     // Turn down HTSJDK logging
     htsjdk.samtools.util.Log.setGlobalLogLevel(htsjdk.samtools.util.Log.LogLevel.WARNING)
 
-    // Use the Intel Inflater/Deflater if available
-    if (SystemUtils.IntelCompressionLibrarySupported) {
-      BlockCompressedOutputStream.setDefaultDeflaterFactory(new IntelDeflaterFactory)
-      BlockGunzipper.setDefaultInflaterFactory(new IntelInflaterFactory)
-    }
-
     val startTime = System.currentTimeMillis()
     val exit      = Sopt.parseCommandAndSubCommand[FgBioCommonArgs,FgBioTool](name, args.toIndexedSeq, Sopt.find[FgBioTool](packageList)) match {
       case Sopt.Failure(usage) =>

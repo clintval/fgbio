@@ -330,15 +330,18 @@ trait UmiConsensusCaller[ConsensusRead <: SimpleRead] {
     */
   protected[umi] def filterToMostCommonAlignment(recs: Seq[SourceRead]): Seq[SourceRead] = {
     val groups = new ArrayBuffer[AlignmentGroup]
-    val sorted = recs.sortBy(r => -r.length).toIndexedSeq
+
+    val sorted = recs
+      .map { read: SourceRead => (read, simplifyCigar(read.cigar))}
+      .sortBy(-_._2.lengthOnQuery)
+      .toIndexedSeq
 
     forloop (from=0, until=sorted.length) { i =>
-      val simpleCigar = simplifyCigar(sorted(i).cigar)
       var found = false
-      groups.foreach { g => if (simpleCigar.isPrefixOf(g.cigar)) { g.add(i); found = true } }
+      groups.foreach { g => if (sorted(i)._2.isPrefixOf(g.cigar)) { g.add(i); found = true } }
 
       if (!found) {
-        val newGroup = AlignmentGroup(simpleCigar, new mutable.BitSet(sorted.size))
+        val newGroup = AlignmentGroup(sorted(i)._2, new mutable.BitSet(sorted.size))
         newGroup.add(i)
         groups += newGroup
       }
@@ -346,34 +349,39 @@ trait UmiConsensusCaller[ConsensusRead <: SimpleRead] {
 
     if (groups.isEmpty) {
       Seq.empty
-    }
-    else {
+    } else {
       val bestGroup = groups.maxBy(_.size)
       val keepers = new ArrayBuffer[SourceRead](bestGroup.size)
       forloop (from=0, until=sorted.length) { i =>
-        if (bestGroup.contains(i)) keepers += sorted(i)
-        else sorted(i).sam.foreach(rejectRecords(FilterMinorityAlignment, _))
+        if (bestGroup.contains(i)) keepers += sorted(i)._1
+        else sorted(i)._1.sam.foreach(rejectRecords(FilterMinorityAlignment, _))
       }
 
       keepers.toIndexedSeq
     }
   }
 
-  /** Simplifies the cigar by turning other operators into Ms if that's how we want to think of them. */
+  /** Simplifies the cigar.
+    *
+    * Convert leading soft-clipping into Ms (5' end in sequencing order) but ignore trailing soft-clipping (3' end in
+    * sequencing order).
+    */
   private def simplifyCigar(cigar: Cigar) = {
     import CigarOperator._
-    if (cigar.forall(e => e.operator == M || e.operator == I || e.operator == D)) {
+    if (cigar.forall(e => e.operator == M)) {
       cigar
-    }
-    else {
-      val newElems = cigar.elems.map {
-        case CigarElem(S,  len) => CigarElem(M, len)
-        case CigarElem(EQ, len) => CigarElem(M, len)
-        case CigarElem(X,  len) => CigarElem(M, len)
-        case CigarElem(H,  len) => CigarElem(M, len)
-        case cig => cig
+    } else {
+      val leading  = cigar.elems.takeWhile(_.operator.isClipping).map(e => CigarElem(M, e.length))
+      val trailing = cigar.elems.dropWhile(_.operator.isClipping).takeWhile(e => !e.operator.isClipping).reverse.dropWhile(_.operator.isIndel).reverse
+      val newElems = if (trailing.exists(e => e.operator == EQ || e.operator == X)) {
+        leading ++ trailing.map {
+          case CigarElem(EQ, len) => CigarElem(M, len)
+          case CigarElem(X,  len) => CigarElem(M, len)
+          case cig => cig
+        }
+      } else {
+        leading ++ trailing
       }
-
       Cigar(newElems).coalesce
     }
   }
